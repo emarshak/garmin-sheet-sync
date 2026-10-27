@@ -12,7 +12,7 @@ It uses Garmin's official **Personal API**, a free, read-only API for your own d
 2. It reads HRV, sleep and daily summaries for the days it needs.
 3. It submits one row per day to your Google Form's `formResponse` URL, and the Form writes it to the linked Sheet.
 
-Garmin files last night's sleep and HRV under **today's** date, and those are final by morning, so today's row is sent right away with just the overnight fields. Today's totals (steps, stress, Body Battery, heart rate) keep changing until midnight, so they're held back, and the complete row for the day is sent on the first run after it ends. Each run also re-pulls the last 3 days, because Garmin sometimes revises recent data, and submits only days that are new or changed. It checks each submission against Google's confirmation page and stops with an explanation if Google rejects it.
+Garmin files last night's sleep, HRV and overnight heart rate under **today's** date, and those are final by morning, so today's row is sent right away with just the overnight fields. Today's totals (steps, stress, Body Battery, heart rate) keep changing until midnight, so they're held back, and the complete row for the day is sent on the first run after it ends. Each run also re-pulls the last 3 days, because Garmin sometimes revises recent data, and submits only days that are new or changed. It checks each submission against Google's confirmation page and stops with an explanation if Google rejects it.
 
 ## Columns
 
@@ -20,7 +20,7 @@ Garmin files last night's sleep and HRV under **today's** date, and those are fi
 |---|---|---|
 | `date` | — | `YYYY-MM-DD` |
 | `hrv_last_night`, `hrv_5min_high`, `hrv_weekly_avg`, `hrv_status`, `hrv_baseline_low`, `hrv_baseline_high` | `/hrv-service/hrv/daily/{start}/{end}` | Overnight HRV in ms |
-| `sleep_score`, `sleep_hours`, `deep_hours`, `rem_hours` | `/sleep-service/sleep/dailySleepSummariesByDate` | Durations in hours |
+| `sleep_score`, `sleep_hours`, `deep_hours`, `rem_hours`, `overnight_hr` | `/sleep-service/sleep/dailySleepSummariesByDate` | Durations in hours; `overnight_hr` is average heart rate while asleep, in bpm |
 | `resting_hr`, `min_hr`, `max_hr`, `body_battery_high`, `body_battery_low`, `avg_stress`, `steps` | `/usersummary-service/v2/dailysummaries` | Falls back to `/usersummary-service/usersummary/daily` one day at a time |
 | `readiness_score`, `readiness_level` | — | Left blank: the Personal API doesn't provide training readiness |
 
@@ -40,9 +40,9 @@ Garmin emails you about a week before a key expires. When that happens, create a
 
 ### 2. Create the Google Form
 
-Skip this step if you already have the form from the userscript version; the script writes to the same form.
+If you already have the form from the userscript version, just add one more Short answer question at the end titled `overnight_hr`, then redo step 3 to get a new pre-filled link. The script warns about, and skips, any field your form doesn't have.
 
-1. At [forms.google.com](https://forms.google.com), create a form with 20 **Short answer** questions, none required. Title each one exactly as follows, in this order:
+1. At [forms.google.com](https://forms.google.com), create a form with 21 **Short answer** questions, none required. Title each one exactly as follows, in this order:
 
    ```
    date
@@ -65,6 +65,7 @@ Skip this step if you already have the form from the userscript version; the scr
    steps
    readiness_score
    readiness_level
+   overnight_hr
    ```
 
    This version doesn't fill the two `readiness_` questions. Keep them if you have older rows from the userscript; otherwise you can leave them out.
@@ -147,7 +148,7 @@ It runs at 9:13 AM, which picks up last night's sleep and HRV and completes the 
 
 | Command | What it does |
 |---|---|
-| `node garmin-sheet-sync.mjs` | Sync last night's sleep and HRV, yesterday's full day, and any revised days |
+| `node garmin-sheet-sync.mjs` | Sync last night's sleep, HRV and overnight HR, yesterday's full day, and any revised days |
 | `--backfill 365` | Re-pull the last N days; only changed days are resubmitted |
 | `--dry-run` | Print the rows instead of submitting them |
 | `--dump 2026-10-20` | Print Garmin's raw responses and the parsed row for one day |
@@ -162,8 +163,8 @@ The script records which days it has sent in `~/.config/garmin-sheet-sync/state.
 
 Google Forms can only append, so each date normally gets two rows: a morning row with sleep and HRV, then the complete row the next day. If Garmin revises a day, that adds another. The latest row for a date is always the most complete. To get one row per day (the latest), add a tab named `Daily` with:
 
-- **A1:** `={'Form Responses 1'!A1:U1}`
-- **A2:** `=SORT(SORTN(SORT(FILTER('Form Responses 1'!A2:U,'Form Responses 1'!B2:B<>""),1,FALSE),9^9,2,2,TRUE),2,TRUE)`
+- **A1:** `={'Form Responses 1'!A1:V1}`
+- **A2:** `=SORT(SORTN(SORT(FILTER('Form Responses 1'!A2:V,'Form Responses 1'!B2:B<>""),1,FALSE),9^9,2,2,TRUE),2,TRUE)`
 
 ## Troubleshooting
 

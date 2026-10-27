@@ -47,6 +47,7 @@ const FIELDS = [
   'sleep_score', 'sleep_hours', 'deep_hours', 'rem_hours',
   'body_battery_high', 'body_battery_low', 'avg_stress', 'steps',
   'readiness_score', 'readiness_level',
+  'overnight_hr',
 ];
 
 // Whole-day totals that are still changing until the day ends.
@@ -211,8 +212,20 @@ async function pullSleep(g, from, to, rows) {
       r.sleep_hours = hours(pick(v, 'sleepTimeSeconds', 'totalSleepTimeInSeconds', 'sleepTimeInSeconds'));
       r.deep_hours = hours(pick(v, 'deepSleepSeconds', 'deepSleepDurationInSeconds', 'deepTime'));
       r.rem_hours = hours(pick(v, 'remSleepSeconds', 'remSleepInSeconds', 'remTime'));
+      r.overnight_hr = overnightHr(s, v);
     }
   }
+}
+
+// Average heart rate while asleep: Garmin's own figure if present, else the mean of the sleep HR samples.
+function overnightHr(s, v) {
+  const direct = pick(v, 'avgHeartRate', 'averageHeartRate', 'avgSleepHeartRate', 'sleepAvgHeartRate')
+    || pick(s, 'avgHeartRate', 'averageHeartRate', 'avgSleepHeartRate');
+  if (direct !== '') return Math.round(direct);
+  const samples = (s.sleepHeartRate || v.sleepHeartRate || [])
+    .map((x) => (typeof x === 'number' ? x : x && x.value))
+    .filter((x) => typeof x === 'number' && x > 0);
+  return samples.length ? Math.round(samples.reduce((a, b) => a + b, 0) / samples.length) : '';
 }
 
 function applyDaily(r, s) {
