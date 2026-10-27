@@ -12,7 +12,7 @@ It uses Garmin's official **Personal API**, a free, read-only API for your own d
 2. It reads HRV, sleep and daily summaries for the days it needs.
 3. It submits one row per day to your Google Form's `formResponse` URL, and the Form writes it to the linked Sheet.
 
-Each run re-pulls the last 3 days, because Garmin revises recent data, and submits only days that are new or changed. It checks each submission against Google's confirmation page and stops with an explanation if Google rejects it.
+Garmin files last night's sleep and HRV under **today's** date, and those are final by morning, so today's row is sent right away with just the overnight fields. Today's totals (steps, stress, Body Battery, heart rate) keep changing until midnight, so they're held back, and the complete row for the day is sent on the first run after it ends. Each run also re-pulls the last 3 days, because Garmin sometimes revises recent data, and submits only days that are new or changed. It checks each submission against Google's confirmation page and stops with an explanation if Google rejects it.
 
 ## Columns
 
@@ -141,13 +141,13 @@ node garmin-sheet-sync.mjs                           # first real sync: backfill
    launchctl load ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
    ```
 
-It runs at 9:13 AM. If the Mac is asleep then, it runs when the Mac wakes. Output goes to `~/Library/Logs/garmin-sheet-sync.log`. To run it immediately: `launchctl start com.garmin-sheet-sync`.
+It runs at 9:13 AM, which picks up last night's sleep and HRV and completes the previous day's row. If the Mac is asleep then, it runs when the Mac wakes. Output goes to `~/Library/Logs/garmin-sheet-sync.log`. To run it immediately: `launchctl start com.garmin-sheet-sync`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `node garmin-sheet-sync.mjs` | Sync new days and re-check the last 3 |
+| `node garmin-sheet-sync.mjs` | Sync last night's sleep and HRV, yesterday's full day, and any revised days |
 | `--backfill 365` | Re-pull the last N days; only changed days are resubmitted |
 | `--dry-run` | Print the rows instead of submitting them |
 | `--dump 2026-10-20` | Print Garmin's raw responses and the parsed row for one day |
@@ -160,7 +160,7 @@ The script records which days it has sent in `~/.config/garmin-sheet-sync/state.
 
 ## Duplicate rows
 
-Google Forms can only append. When Garmin revises a day, the next sync adds a second row for that date with a newer timestamp. To get one row per day (the latest), add a tab named `Daily` with:
+Google Forms can only append, so each date normally gets two rows: a morning row with sleep and HRV, then the complete row the next day. If Garmin revises a day, that adds another. The latest row for a date is always the most complete. To get one row per day (the latest), add a tab named `Daily` with:
 
 - **A1:** `={'Form Responses 1'!A1:U1}`
 - **A2:** `=SORT(SORTN(SORT(FILTER('Form Responses 1'!A2:U,'Form Responses 1'!B2:B<>""),1,FALSE),9^9,2,2,TRUE),2,TRUE)`

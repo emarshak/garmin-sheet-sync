@@ -49,6 +49,9 @@ const FIELDS = [
   'readiness_score', 'readiness_level',
 ];
 
+// Whole-day totals that are still changing until the day ends.
+const DAY_FIELDS = ['resting_hr', 'min_hr', 'max_hr', 'body_battery_high', 'body_battery_low', 'avg_stress', 'steps'];
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -313,7 +316,14 @@ async function sync(cfg, { backfillDays, dryRun }) {
       ? addDays(parseYmd(state.lastSyncedDate), -cfg.overlapDays)
       : addDays(today, -(cfg.firstRunDays - 1));
 
-  const rows = await collect(g, from, today);
+  // Garmin files last night's sleep and HRV under today's date, and those are final by
+  // morning. Today's totals (steps, stress, Body Battery, heart rate) keep changing until
+  // midnight, and a form can only append, so they're held back: today's row carries only
+  // the overnight fields, and the full row follows on the first run after the day ends.
+  const todayS = ymd(today);
+  const rows = (await collect(g, from, today))
+    .map((r) => (r.date === todayS ? Object.fromEntries(Object.entries(r).filter(([k]) => !DAY_FIELDS.includes(k))) : r))
+    .filter((r) => FIELDS.some((f) => f !== 'date' && r[f] !== '' && r[f] !== undefined));
   if (dryRun) {
     console.table(rows);
     log(`Dry run: ${rows.length} days, nothing submitted.`);
@@ -328,7 +338,7 @@ async function sync(cfg, { backfillDays, dryRun }) {
     n++;
     await pause(cfg.requestDelayMs);
   }
-  state.lastSyncedDate = ymd(today);
+  state.lastSyncedDate = todayS;
   writeJson(STATE_FILE, state);
   log(`Synced: ${n} submitted, ${rows.length - n} unchanged.`);
 }
