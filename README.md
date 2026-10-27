@@ -144,3 +144,7 @@ Google Forms can only append. When Garmin revises a day, the next sync adds a se
 - **Terms of service.** Automated access to Garmin Connect is a gray area under Garmin's terms. This script only reads your own data, at personal scale, from your own signed-in session.
 - **Manual trigger.** Data is only as fresh as your last visit to Garmin Connect. Backfill covers any gaps.
 - **Privacy.** Anyone with your form's link can submit rows to it. Keep the link private, and keep the Sheet's sharing settings restricted.
+
+## License
+
+[MIT](LICENSE)
