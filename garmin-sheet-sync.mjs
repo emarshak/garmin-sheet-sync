@@ -246,12 +246,13 @@ async function pullDailies(g, from, to, rows) {
     for (const s of rowsOf(data, 'data', 'dailySummaries')) {
       const d = dateOf(s);
       if (!d) continue;
-      applyDaily(row(rows, d), s);
-      found++;
+      const r = row(rows, d);
+      applyDaily(r, s);
+      if (DAY_FIELDS.some((f) => r[f] !== '' && r[f] !== undefined)) found++;
     }
   }
   if (found) return;
-  log('Range endpoint returned no daily summaries; fetching day by day.');
+  log('Range endpoint gave no usable daily summaries; fetching day by day.');
   for (let d = new Date(from); d <= to; d = addDays(d, 1)) {
     const s = await g.get('/usersummary-service/usersummary/daily', { calendarDate: ymd(d) });
     if (s) applyDaily(row(rows, ymd(d)), s);
