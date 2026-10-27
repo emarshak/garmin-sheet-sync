@@ -1,39 +1,46 @@
 # Garmin Connect → Google Sheet sync
 
-A Tampermonkey userscript that copies daily health metrics from Garmin Connect into a Google Sheet, one row per day: HRV, resting heart rate, sleep, Body Battery, stress, steps and training readiness.
+A small Node script that copies your daily Garmin health metrics into a Google Sheet, one row per day: HRV, resting heart rate, sleep, Body Battery, stress and steps.
 
-It runs inside your own signed-in Garmin Connect tab, so no Garmin password or API token is stored anywhere. Rows are submitted to a Google Form that is linked to a Sheet, so no Google Apps Script or OAuth is needed. This works even on Google accounts with Advanced Protection, which blocks Apps Script web apps.
+It uses Garmin's official **Personal API**, a free, read-only API for your own data. Rows go to a Google Form that is linked to a Sheet, so no Google Apps Script or OAuth is needed. That also works on Google accounts with Advanced Protection, which block Apps Script web apps. On macOS, a launchd job runs it every morning.
 
-## Why this exists
-
-- Garmin's official Health and Activity APIs are only open to approved business partners, and new applications are paused.
-- Garmin doesn't sync HRV to Apple Health.
-- A Sheet is easy to chart yourself and easy for other tools (spreadsheets, notebooks, AI assistants with Google Drive access) to read.
+> The earlier Tampermonkey userscript, which read Garmin's unofficial web endpoints, is in [`deprecated/`](deprecated/).
 
 ## How it works
 
-1. When you open `connect.garmin.com`, the script reads your data from the same internal JSON endpoints (`/gc-api/...`) the Garmin web app uses, with your existing session.
-2. It builds one row per day and submits each row to your Google Form's `formResponse` URL.
-3. The Form writes each submission to its linked Sheet.
+1. The script trades your Personal API key for a short-lived access token at `personal.connectapi.garmin.com`.
+2. It reads HRV, sleep and daily summaries for the days it needs.
+3. It submits one row per day to your Google Form's `formResponse` URL, and the Form writes it to the linked Sheet.
 
-It syncs automatically on page load if the last sync was more than 6 hours ago. It re-pulls the last 3 days, because Garmin revises recent data, and only resubmits days whose values changed. Each submission is checked against Google's confirmation page, and the sync stops with an explanation if Google rejects it.
+Each run re-pulls the last 3 days, because Garmin revises recent data, and submits only days that are new or changed. It checks each submission against Google's confirmation page and stops with an explanation if Google rejects it.
 
 ## Columns
 
-| Field | Source endpoint | Notes |
+| Field | Personal API endpoint | Notes |
 |---|---|---|
 | `date` | — | `YYYY-MM-DD` |
-| `hrv_last_night`, `hrv_5min_high`, `hrv_weekly_avg`, `hrv_status`, `hrv_baseline_low`, `hrv_baseline_high` | `hrv-service/hrv/daily/{from}/{to}` | Overnight HRV in ms |
-| `resting_hr`, `min_hr`, `max_hr` | `usersummary-service/usersummary/daily/{displayName}` | bpm |
-| `body_battery_high`, `body_battery_low`, `avg_stress`, `steps` | same daily summary | |
-| `sleep_score`, `sleep_hours`, `deep_hours`, `rem_hours` | `sleep-service/stats/sleep/daily/{from}/{to}` | Durations in hours |
-| `readiness_score`, `readiness_level` | `metrics-service/metrics/trainingreadiness/{date}` | Morning (on-wake) value when available |
+| `hrv_last_night`, `hrv_5min_high`, `hrv_weekly_avg`, `hrv_status`, `hrv_baseline_low`, `hrv_baseline_high` | `/hrv-service/hrv/daily/{start}/{end}` | Overnight HRV in ms |
+| `sleep_score`, `sleep_hours`, `deep_hours`, `rem_hours` | `/sleep-service/sleep/dailySleepSummariesByDate` | Durations in hours |
+| `resting_hr`, `min_hr`, `max_hr`, `body_battery_high`, `body_battery_low`, `avg_stress`, `steps` | `/usersummary-service/v2/dailysummaries` | Falls back to `/usersummary-service/usersummary/daily` one day at a time |
+| `readiness_score`, `readiness_level` | — | Left blank: the Personal API doesn't provide training readiness |
 
-Range endpoints are queried in 28-day windows; Garmin rejects longer ranges.
+Requests are split to stay within Garmin's per-request range limits (28 days for HRV, 31 for sleep, 365 for daily summaries).
 
-## Setup (about 10 minutes)
+## Setup (about 15 minutes)
 
-### 1. Create the Google Form
+You need Node 18 or newer (`node --version`).
+
+### 1. Create a Garmin Personal API key
+
+1. Sign in at [connect.garmin.com](https://connect.garmin.com) and open **[Personal API Key](https://connect.garmin.com/app/settings/personalApiToken)**.
+2. Click **Create Key**, read and accept the terms, choose an expiration period, and click **Create**.
+3. Copy the key. **Garmin shows it only once**, so treat it like a password.
+
+Garmin emails you about a week before a key expires. When that happens, create a new key and put it in your config file.
+
+### 2. Create the Google Form
+
+Skip this step if you already have the form from the userscript version; the script writes to the same form.
 
 1. At [forms.google.com](https://forms.google.com), create a form with 20 **Short answer** questions, none required. Title each one exactly as follows, in this order:
 
@@ -60,11 +67,13 @@ Range endpoints are queried in 28-day windows; Garmin rejects longer ranges.
    readiness_level
    ```
 
+   This version doesn't fill the two `readiness_` questions. Keep them if you have older rows from the userscript; otherwise you can leave them out.
+
 2. Under **Settings → Responses**, turn **off** "Collect email addresses" and "Limit to 1 response". Either one forces sign-in and blocks the script.
 3. On the **Responses** tab, click **Link to Sheets** and create a new spreadsheet.
 4. Click **Publish**.
 
-### 2. Get the pre-filled link
+### 3. Get the pre-filled link
 
 1. Open the **⋮** menu and choose **Get pre-filled link**.
 2. In each box, type that question's own title (`date` in the date box, `hrv_last_night` in the next, and so on).
@@ -75,7 +84,7 @@ The script reads this link to map each field to the form's hidden entry IDs.
 <details>
 <summary>Can't find "Get pre-filled link"?</summary>
 
-Open the published responder link, then run this in the DevTools console. It builds the same link from your question titles and copies it to the clipboard:
+Open the published responder link, then run this in the browser's DevTools console. It builds the same link from your question titles and copies it to the clipboard:
 
 ```js
 const u = new URL(location.origin + location.pathname);
@@ -87,37 +96,67 @@ copy(u.toString()); console.log(u.toString());
 If Chrome blocks pasting into the console, type `allow pasting` first.
 </details>
 
-### 3. Install the userscript
+### 4. Configure
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) for Chrome.
-2. Go to `chrome://extensions`, open **Details** on Tampermonkey, and turn on **Allow User Scripts**.
-3. Click the Tampermonkey icon, choose **Create a new script**, and replace the editor contents with [`garmin-sheet-sync.user.js`](garmin-sheet-sync.user.js).
-4. Set `PREFILL_URL` in the `CONFIG` block to the link from step 2, and save.
+Clone this repo, then create `~/.config/garmin-sheet-sync/config.json`:
 
-### 4. Sync
+```bash
+git clone https://github.com/emarshak/garmin-sheet-sync.git
+mkdir -p ~/.config/garmin-sheet-sync
+nano ~/.config/garmin-sheet-sync/config.json
+```
 
-Open [connect.garmin.com](https://connect.garmin.com) while signed in. A **Sync → Sheet** button appears in the bottom-right corner, and the first run backfills 90 days.
+```json
+{
+  "apiKey": "YOUR_GARMIN_PERSONAL_API_KEY",
+  "prefillUrl": "https://docs.google.com/forms/d/e/…/viewform?usp=pp_url&entry.…"
+}
+```
 
-## Configuration
+Then restrict it to your user, since it holds your API key:
 
-All settings are in the `CONFIG` block at the top of the script:
+```bash
+chmod 600 ~/.config/garmin-sheet-sync/config.json
+```
 
-| Setting | Default | Purpose |
-|---|---|---|
-| `PREFILL_URL` | — | Your form's pre-filled link (required) |
-| `FIRST_RUN_DAYS` | `90` | Backfill window on the first sync |
-| `OVERLAP_DAYS` | `3` | Recent days to re-pull on each sync |
-| `AUTO_SYNC_MIN_HOURS` | `6` | Auto-sync on page load if the last sync is older than this |
-| `REQUEST_DELAY_MS` | `250` | Pause between Garmin calls and between form submissions |
-| `DEBUG` | `true` | Log raw Garmin responses to the console; set to `false` once verified |
+### 5. Test
 
-## Tampermonkey menu
+```bash
+cd garmin-sheet-sync
+node garmin-sheet-sync.mjs --check                   # verifies the key and the form link
+node garmin-sheet-sync.mjs --dry-run --backfill 7    # shows a week of rows without submitting
+node garmin-sheet-sync.mjs                           # first real sync: backfills 90 days
+```
 
-On a Garmin Connect page, the Tampermonkey icon offers:
+### 6. Run it every morning (macOS)
 
-- **Sync now**
-- **Full backfill (90 days)** / **Full backfill (365 days)**
-- **Reset sync state (resends everything)**: clears the record of which days were sent
+1. Edit [`launchd/com.garmin-sheet-sync.plist`](launchd/com.garmin-sheet-sync.plist) and replace the three `REPLACE_ME` values:
+   - `REPLACE_ME_NODE_PATH`: the output of `which node`, for example `/opt/homebrew/bin/node`
+   - `REPLACE_ME_REPO_PATH`: the full path to this repo
+   - `REPLACE_ME_HOME`: your home folder, for example `/Users/you`
+2. Install and load it:
+
+   ```bash
+   cp launchd/com.garmin-sheet-sync.plist ~/Library/LaunchAgents/
+   launchctl load ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
+   ```
+
+It runs at 9:13 AM. If the Mac is asleep then, it runs when the Mac wakes. Output goes to `~/Library/Logs/garmin-sheet-sync.log`. To run it immediately: `launchctl start com.garmin-sheet-sync`.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `node garmin-sheet-sync.mjs` | Sync new days and re-check the last 3 |
+| `--backfill 365` | Re-pull the last N days; only changed days are resubmitted |
+| `--dry-run` | Print the rows instead of submitting them |
+| `--dump 2026-10-20` | Print Garmin's raw responses and the parsed row for one day |
+| `--check` | Verify the API key and form link |
+| `--reset` | Forget which days were sent, so the next run resends its whole window |
+
+Optional settings in `config.json`: `firstRunDays` (default `90`), `overlapDays` (`3`), `requestDelayMs` (`250`). `GARMIN_API_KEY` and `PREFILL_URL` environment variables override the file.
+
+The script records which days it has sent in `~/.config/garmin-sheet-sync/state.json`.
 
 ## Duplicate rows
 
@@ -130,20 +169,20 @@ Google Forms can only append. When Garmin revises a day, the next sync adds a se
 
 | Symptom | Cause and fix |
 |---|---|
-| `Set PREFILL_URL in the script first.` | `PREFILL_URL` still has the placeholder value |
-| `Form rejected: form requires sign-in` | Turn off email collection and "Limit to 1 response" |
-| `Form rejected: form is not accepting responses` | Publish the form and make sure it's accepting responses |
-| `Form rejected: form URL not found` | Use the responder link (`/forms/d/e/.../viewform`), not the editor link |
-| A column is always empty | Garmin's field name differs for your account or device. With `DEBUG: true`, find the endpoint's raw response in the console (filter for `[garmin-sync]`) and update the matching `pick(...)` call |
-| Garmin requests fail with 401/403 | Sign in to Garmin Connect again and reload |
-| Everything was working and then stopped | Garmin likely changed an internal endpoint; compare against the requests the Garmin web app makes in the DevTools Network tab |
+| `Garmin rejected the API key` | The key is wrong, revoked or expired. Create a new one and update `config.json` |
+| `Missing apiKey and prefillUrl` | `config.json` is missing or in the wrong place |
+| `Form rejected …: the form requires sign-in` | Turn off email collection and "Limit to 1 response" |
+| `Form rejected …: the form is not published` | Publish the form and make sure it's accepting responses |
+| `Form rejected …: form not found` | Use the responder link (`/forms/d/e/.../viewform`), not the editor link |
+| `Garmin rate limit hit (429)` | Wait and run again, or raise `requestDelayMs` |
+| A column is always empty | Garmin's field name differs from what the script expects. Run `--dump` for a recent date and check the field names in the raw response |
+| The launchd job doesn't run | Check `~/Library/Logs/garmin-sheet-sync.log`, and that the node path in the plist matches `which node` |
 
-## Caveats
+## Notes
 
-- **Unofficial.** These are undocumented Garmin endpoints and can change without notice.
-- **Terms of service.** Automated access to Garmin Connect is a gray area under Garmin's terms. This script only reads your own data, at personal scale, from your own signed-in session.
-- **Manual trigger.** Data is only as fresh as your last visit to Garmin Connect. Backfill covers any gaps.
-- **Privacy.** Anyone with your form's link can submit rows to it. Keep the link private, and keep the Sheet's sharing settings restricted.
+- **Read the Personal API terms** when you create the key. Garmin's developer terms restrict passing data to other parties; this script sends only your own data to your own Google Form.
+- **Privacy.** Anyone with your form's link can submit rows to it. Keep the link and `config.json` private, and keep the Sheet's sharing restricted.
+- Not affiliated with or endorsed by Garmin.
 
 ## License
 
