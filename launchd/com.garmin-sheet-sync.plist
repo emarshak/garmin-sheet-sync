@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs garmin-sheet-sync.mjs every morning on macOS.
+  Replace the three REPLACE_ME paths (see README), copy this file to
+  ~/Library/LaunchAgents/, then: launchctl load ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.garmin-sheet-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_ME_NODE_PATH</string>          <!-- output of: which node -->
+    <string>REPLACE_ME_REPO_PATH/garmin-sheet-sync.mjs</string>
+  </array>
+
+  <!-- 9:13 AM daily, after an overnight sync of sleep and HRV. A missed run (Mac asleep) runs on wake. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>13</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>REPLACE_ME_HOME/Library/Logs/garmin-sheet-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>REPLACE_ME_HOME/Library/Logs/garmin-sheet-sync.log</string>
+</dict>
+</plist>
