@@ -57,7 +57,8 @@ const DAY_FIELDS = ['resting_hr', 'min_hr', 'max_hr', 'body_battery_high', 'body
 // Helpers
 // ---------------------------------------------------------------------------
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = (...a) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), ...a);
+const stamp = (d = new Date()) => `${ymd(d)} ${d.toTimeString().slice(0, 8)}`;
+const log = (...a) => console.log(stamp(), ...a);
 
 function ymd(d) {
   const p = (n) => String(n).padStart(2, '0');
@@ -228,14 +229,16 @@ function overnightHr(s, v) {
   return samples.length ? Math.round(samples.reduce((a, b) => a + b, 0) / samples.length) : '';
 }
 
+// Field names: v2 range summaries nest values (heartRate.restingValue); the per-day endpoint is flat.
 function applyDaily(r, s) {
-  r.resting_hr = pick(s, 'restingHeartRate', 'restingHeartRateInBeatsPerMinute');
-  r.min_hr = pick(s, 'minHeartRate', 'minHeartRateInBeatsPerMinute');
-  r.max_hr = pick(s, 'maxHeartRate', 'maxHeartRateInBeatsPerMinute');
-  r.body_battery_high = pick(s, 'bodyBatteryHighestValue', 'bodyBattery.highest');
-  r.body_battery_low = pick(s, 'bodyBatteryLowestValue', 'bodyBattery.lowest');
-  r.avg_stress = pick(s, 'averageStressLevel', 'stress.averageStressLevel');
-  r.steps = pick(s, 'totalSteps', 'steps');
+  r.resting_hr = pick(s, 'heartRate.restingValue', 'restingHeartRate');
+  r.min_hr = pick(s, 'heartRate.minValue', 'minHeartRate');
+  r.max_hr = pick(s, 'heartRate.maxValue', 'maxHeartRate');
+  r.body_battery_high = pick(s, 'bodyBattery.maxValue', 'bodyBatteryHighestValue');
+  r.body_battery_low = pick(s, 'bodyBattery.minValue', 'bodyBatteryLowestValue');
+  r.avg_stress = pick(s, 'stress.avgLevel', 'averageStressLevel');
+  if (typeof r.avg_stress === 'number' && r.avg_stress < 0) r.avg_stress = ''; // Garmin uses -1/-2 for "not enough data"
+  r.steps = pick(s, 'movement.steps.value', 'totalSteps');
 }
 
 async function pullDailies(g, from, to, rows) {
