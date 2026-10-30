@@ -2,7 +2,7 @@
 
 A small Node script that copies your daily Garmin health metrics into a Google Sheet, one row per day: HRV, resting heart rate, sleep, Body Battery, stress and steps.
 
-It uses Garmin's official **Personal API**, a free, read-only API for your own data. Rows go to a Google Form that is linked to a Sheet, so no Google Apps Script or OAuth is needed. That also works on Google accounts with Advanced Protection, which block Apps Script web apps. On macOS, a launchd job runs it every morning.
+It uses Garmin's official **Personal API**, a free, read-only API for your own data. Rows go to a Google Form that is linked to a Sheet, so no Google Apps Script or OAuth is needed. That also works on Google accounts with Advanced Protection, which block Apps Script web apps. On macOS, a launchd job runs it every 2 hours.
 
 > The earlier Tampermonkey userscript, which read Garmin's unofficial web endpoints, is in [`deprecated/`](deprecated/).
 
@@ -129,20 +129,24 @@ node garmin-sheet-sync.mjs --dry-run --backfill 7    # shows a week of rows with
 node garmin-sheet-sync.mjs                           # first real sync: backfills 90 days
 ```
 
-### 6. Run it every morning (macOS)
+### 6. Run it automatically (macOS)
 
-1. Edit [`launchd/com.garmin-sheet-sync.plist`](launchd/com.garmin-sheet-sync.plist) and replace the three `REPLACE_ME` values:
-   - `REPLACE_ME_NODE_PATH`: the output of `which node`, for example `/opt/homebrew/bin/node`
-   - `REPLACE_ME_REPO_PATH`: the full path to this repo
-   - `REPLACE_ME_HOME`: your home folder, for example `/Users/you`
-2. Install and load it:
+Keep the repo outside `~/Documents`, `~/Desktop` and `~/Downloads`: macOS blocks background jobs from reading those folders. From the repo folder, fill in the template, install it, and run it once as a test:
 
-   ```bash
-   cp launchd/com.garmin-sheet-sync.plist ~/Library/LaunchAgents/
-   launchctl load ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
-   ```
+```bash
+sed -e "s|REPLACE_ME_NODE_PATH|$(which node)|" \
+    -e "s|REPLACE_ME_REPO_PATH|$(pwd)|" \
+    -e "s|REPLACE_ME_HOME|$HOME|g" \
+    launchd/com.garmin-sheet-sync.plist > ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
 
-It runs at 9:13 AM, which picks up last night's sleep and HRV and completes the previous day's row. If the Mac is asleep then, it runs when the Mac wakes. Output goes to `~/Library/Logs/garmin-sheet-sync.log`. To run it immediately: `launchctl start com.garmin-sheet-sync`.
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
+launchctl kickstart gui/$(id -u)/com.garmin-sheet-sync
+tail ~/Library/Logs/garmin-sheet-sync.log
+```
+
+To change the schedule later, unload the job with `launchctl bootout gui/$(id -u)/com.garmin-sheet-sync`, then repeat the `sed` and `bootstrap` steps. Running only the `bootout` removes the job. If you installed Node with nvm, repeat them after upgrading Node too, since `which node` points to a specific version.
+
+It runs every 2 hours and once when you log in. A run that's due while the Mac is asleep happens when it wakes, so last night's sleep and HRV land soon after you open the laptop in the morning, and the previous day's row is completed on the first run after midnight. Runs where nothing changed submit nothing, and a run that fails (for example, before Wi-Fi reconnects after waking) is covered by the next one. If the Mac is shut down, the next run fills in the last 3 days. Output goes to `~/Library/Logs/garmin-sheet-sync.log`. To run it immediately: `launchctl kickstart gui/$(id -u)/com.garmin-sheet-sync`.
 
 ## Commands
 

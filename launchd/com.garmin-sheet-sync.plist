@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Runs garmin-sheet-sync.mjs every morning on macOS.
+  Runs garmin-sheet-sync.mjs every 2 hours on macOS.
   Replace the three REPLACE_ME paths (see README), copy this file to
   ~/Library/LaunchAgents/, then: launchctl load ~/Library/LaunchAgents/com.garmin-sheet-sync.plist
 -->
@@ -16,14 +16,13 @@
     <string>REPLACE_ME_REPO_PATH/garmin-sheet-sync.mjs</string>
   </array>
 
-  <!-- 9:13 AM daily, after an overnight sync of sleep and HRV. A missed run (Mac asleep) runs on wake. -->
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>9</integer>
-    <key>Minute</key>
-    <integer>13</integer>
-  </dict>
+  <!-- Every 2 hours, plus once at login. Runs where nothing changed submit nothing, so frequent
+       runs are cheap, and they cover a run that fails because Wi-Fi isn't up yet after waking or
+       because the watch hasn't synced last night's sleep yet. A run missed while asleep happens on wake. -->
+  <key>StartInterval</key>
+  <integer>7200</integer>
+  <key>RunAtLoad</key>
+  <true/>
 
   <key>StandardOutPath</key>
   <string>REPLACE_ME_HOME/Library/Logs/garmin-sheet-sync.log</string>
