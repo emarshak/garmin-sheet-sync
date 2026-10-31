@@ -1,5 +1,10 @@
 name: Sync Garmin to Google Sheet
 
+# Security notes (see CLAUDE.md before changing this file):
+# - Secrets are exposed only to the one step that runs our own script, never to third-party actions.
+# - Third-party actions are pinned to full commit SHAs; Dependabot proposes updates.
+# - This repo is public, so logs and caches must never contain health data or credentials.
+
 on:
   schedule:
     # Every 2 hours at :17 (GitHub may start scheduled runs late). Times are UTC.
@@ -25,30 +30,34 @@ jobs:
     env:
       # Garmin dates are local; without this the runner's UTC clock would put "today" a day ahead every evening.
       TZ: America/New_York
-      GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
-      PREFILL_URL: ${{ secrets.PREFILL_URL }}
       GARMIN_SHEET_SYNC_DIR: ${{ github.workspace }}/.sync-state
-      # With no saved state yet, look back only 3 days instead of 90, so switching over from
-      # another computer doesn't resubmit months of rows.
-      FIRST_RUN_DAYS: '3'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+          package-manager-cache: false
 
       # The record of which days were sent (dates and hashes only, no health data) persists
       # between runs as a cache. Each run saves a new entry; restore picks the newest.
       - name: Restore sync state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .sync-state
+          path: .sync-state/state.json
           key: sync-state-${{ github.run_id }}
           restore-keys: sync-state-
 
       - name: Sync
         env:
+          GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
+          PREFILL_URL: ${{ secrets.PREFILL_URL }}
+          # With no saved state yet, look back only 3 days instead of 90, so switching over from
+          # another computer doesn't resubmit months of rows.
+          FIRST_RUN_DAYS: '3'
+          # Passed through env, never interpolated into the script, so input can't inject shell commands.
           BACKFILL: ${{ inputs.backfill }}
         run: |
           if [ -z "$GARMIN_API_KEY" ] || [ -z "$PREFILL_URL" ]; then
@@ -62,8 +71,8 @@ jobs:
           fi
 
       - name: Save sync state
-        if: always()
-        uses: actions/cache/save@v4
+        if: always() && hashFiles('.sync-state/state.json') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .sync-state
+          path: .sync-state/state.json
           key: sync-state-${{ github.run_id }}
