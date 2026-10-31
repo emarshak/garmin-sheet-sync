@@ -1,0 +1,11 @@
+# Local config holds the Garmin API key and form link; state holds sync records. Never commit them.
+config.json
+state.json
+.sync-state/
+
+# Raw Garmin responses (e.g. saved --dump output) contain personal health data.
+*.dump.json
+dump*.txt
+
+.DS_Store
+node_modules/

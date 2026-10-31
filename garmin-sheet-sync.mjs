@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -113,14 +114,30 @@ function writeJson(path, value) {
   chmodSync(path, 0o600);
 }
 
+const IN_CI = process.env.GITHUB_ACTIONS === 'true';
+const isLoopback = (u) => u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+
+// The API key and health data must only ever go to Garmin and Google. Loopback is allowed for tests.
+function checkGarminUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { throw new Error(`GARMIN_BASE_URL is not a valid URL: ${raw}`); }
+  const ok = (u.protocol === 'https:' && (u.hostname === 'garmin.com' || u.hostname.endsWith('.garmin.com'))) || isLoopback(u);
+  if (!ok) throw new Error('GARMIN_BASE_URL must be an https://….garmin.com address; refusing to send the API key elsewhere.');
+  return u.origin;
+}
+
 function loadConfig() {
-  const file = readJson(CONFIG_FILE, {});
+  // Under Actions, settings come only from the workflow's env, never from a file: the state
+  // folder is restored from a cache, and a config file in it must not be able to redirect requests.
+  const file = IN_CI ? {} : readJson(CONFIG_FILE, {});
+  const { baseUrl: _ignoredBaseUrl, ...fileSettings } = file; // the base URL can only be overridden by env
   const cfg = {
     ...DEFAULTS,
-    ...file,
+    ...fileSettings,
     apiKey: process.env.GARMIN_API_KEY || file.apiKey,
     prefillUrl: process.env.PREFILL_URL || file.prefillUrl,
-    baseUrl: (process.env.GARMIN_BASE_URL || file.baseUrl || DEFAULTS.baseUrl).replace(/\/+$/, ''),
+    baseUrl: checkGarminUrl(process.env.GARMIN_BASE_URL || DEFAULTS.baseUrl),
+    firstRunDays: Number(process.env.FIRST_RUN_DAYS) || file.firstRunDays || DEFAULTS.firstRunDays,
   };
   const missing = [];
   if (!cfg.apiKey) missing.push('apiKey');
@@ -152,7 +169,7 @@ class Garmin {
     if (res.status === 401 || res.status === 403) {
       throw new Error('Garmin rejected the API key: it is wrong, revoked or expired. Create a new one at https://connect.garmin.com/app/settings/personalApiToken');
     }
-    if (!res.ok) throw new Error(`Token exchange failed (${res.status}): ${body.slice(0, 200)}`);
+    if (!res.ok) throw new Error(`Token exchange failed (${res.status})`); // body omitted: it may echo credentials
     // The endpoint returns the bearer token as the response body.
     this.token = body.startsWith('{') ? (JSON.parse(body).access_token || JSON.parse(body).accessToken) : body;
     if (!this.token) throw new Error('Token exchange returned no token');
@@ -172,7 +189,11 @@ class Garmin {
     }
     if (res.status === 204 || res.status === 404) return null;
     if (res.status === 429) throw new Error('Garmin rate limit hit (429). Wait a while and run again.');
-    if (!res.ok) throw new Error(`${res.status} on ${path}: ${(await res.text()).slice(0, 200)}`);
+    if (!res.ok) {
+      // Response bodies are left out of errors under Actions, whose logs are public on a public repo.
+      const detail = IN_CI ? '' : `: ${(await res.text()).slice(0, 200)}`;
+      throw new Error(`${res.status} on ${path}${detail}`);
+    }
     const text = await res.text();
     await pause(this.cfg.requestDelayMs);
     return text ? JSON.parse(text) : null;
@@ -268,6 +289,8 @@ async function pullDailies(g, from, to, rows) {
 function formSetup(prefillUrl) {
   let u;
   try { u = new URL(prefillUrl); } catch { throw new Error('prefillUrl is not a valid link'); }
+  const google = u.protocol === 'https:' && u.hostname === 'docs.google.com' && u.pathname.startsWith('/forms/');
+  if (!google && !isLoopback(u)) throw new Error('prefillUrl must be a https://docs.google.com/forms/… link; refusing to send your data elsewhere.');
   if (!/\/viewform$/.test(u.pathname)) throw new Error('prefillUrl should be the pre-filled link ending in /viewform?…');
   const action = u.origin + u.pathname.replace(/\/viewform$/, '/formResponse');
   const map = {};
@@ -290,7 +313,7 @@ async function submitRow(form, r) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
-    redirect: 'follow',
+    redirect: 'follow', // Google answers with its own pages; checked below
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   const html = await res.text();
@@ -305,7 +328,12 @@ async function submitRow(form, r) {
   throw new Error(`Form rejected ${r.date} (${res.status}): ${hint}`);
 }
 
-const fingerprint = (r) => FIELDS.map((f) => r[f] ?? '').join('|');
+// The state file stores a hash of each day's values, not the values themselves, so it holds no
+// health data (it's cached on GitHub when run from Actions). Older state files stored the raw
+// joined values; those still count as a match, so upgrading doesn't resend anything.
+const rawFingerprint = (r) => FIELDS.map((f) => r[f] ?? '').join('|');
+const fingerprint = (r) => createHash('sha256').update(rawFingerprint(r)).digest('hex').slice(0, 16);
+const alreadySent = (sent, r) => sent[r.date] === fingerprint(r) || sent[r.date] === rawFingerprint(r);
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -346,7 +374,7 @@ async function sync(cfg, { backfillDays, dryRun }) {
     log(`Dry run: ${rows.length} days, nothing submitted.`);
     return;
   }
-  const todo = rows.filter((r) => state.sent[r.date] !== fingerprint(r));
+  const todo = rows.filter((r) => !alreadySent(state.sent, r));
   let n = 0;
   for (const r of todo) {
     await submitRow(form, r);
@@ -398,6 +426,10 @@ async function main() {
     if (existsSync(STATE_FILE)) writeJson(STATE_FILE, { lastSyncedDate: null, sent: {} });
     log('Sync state reset; the next run resends everything in its window.');
     return;
+  }
+  // Logs of a public repo's Actions runs are public, so never print health data there.
+  if (IN_CI && (flag('--dry-run') || flag('--dump'))) {
+    throw new Error('--dry-run and --dump print your health data, and Actions logs on a public repo are public. Run them on your own computer.');
   }
   const cfg = loadConfig();
   if (flag('--check')) return check(cfg);
