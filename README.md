@@ -2,7 +2,7 @@
 
 A small Node script that copies your daily Garmin health metrics into a Google Sheet, one row per day: HRV, resting heart rate, sleep, Body Battery, stress and steps.
 
-It uses Garmin's official **Personal API**, a free, read-only API for your own data. Rows go to a Google Form that is linked to a Sheet, so no Google Apps Script or OAuth is needed. That also works on Google accounts with Advanced Protection, which block Apps Script web apps. On macOS, a launchd job runs it every 2 hours.
+It uses Garmin's official **Personal API**, a free, read-only API for your own data. Rows go to a Google Form that is linked to a Sheet, so no Google Apps Script or OAuth is needed. That also works on Google accounts with Advanced Protection, which block Apps Script web apps. It runs on a schedule either on **GitHub Actions** (no computer needed) or on your Mac with launchd, every 2 hours.
 
 > The earlier Tampermonkey userscript, which read Garmin's unofficial web endpoints, is in [`deprecated/`](deprecated/).
 
@@ -129,7 +129,27 @@ node garmin-sheet-sync.mjs --dry-run --backfill 7    # shows a week of rows with
 node garmin-sheet-sync.mjs                           # first real sync: backfills 90 days
 ```
 
-### 6. Run it automatically (macOS)
+### 6a. Run it on GitHub Actions (recommended)
+
+The workflow in [`.github/workflows/sync.yml`](.github/workflows/sync.yml) runs the script on GitHub's servers every 2 hours, so it works whether or not your computer is on. Scheduled workflows are free on public repos. Use this **or** launchd (6b), not both: each keeps its own record of what it sent, so running both doubles your rows.
+
+1. **Fork or use your copy of this repo.** Your secrets stay in your repo and are never shown in its code or logs.
+2. **Add two repository secrets** under **Settings → Secrets and variables → Actions → New repository secret**:
+   - `GARMIN_API_KEY`: your Personal API key
+   - `PREFILL_URL`: your form's pre-filled link
+3. **Run it once by hand:** open **Actions → Sync Garmin to Google Sheet → Run workflow**. The log should end with `Synced: N submitted, M unchanged`.
+4. **If you were running launchd before,** remove that job: `launchctl bootout gui/$(id -u)/com.garmin-sheet-sync`.
+
+How it behaves:
+- **Time zone:** the workflow sets `TZ: America/New_York` so "today" matches Garmin's dates. Change it to yours in `sync.yml`.
+- **State:** the record of sent days (dates and hashes, no health data) is kept in an Actions cache between runs. If the cache is ever lost, the next run looks back only 3 days (`FIRST_RUN_DAYS`), so at worst a few days get a second row.
+- **Backfill:** **Run workflow** takes an optional number of days to re-pull.
+- **Public logs:** logs of a public repo's Actions runs can be read by anyone. The script logs only dates and counts there, and it refuses `--dry-run` and `--dump`, which print your data. Use those on your own computer.
+- **Schedule timing:** GitHub can start scheduled runs late, sometimes by an hour, and skips some runs when it's busy. The next run catches up.
+- **60-day pause:** GitHub disables scheduled workflows in a public repo after 60 days with no commits, and emails you first. Re-enable it with one click on the Actions tab.
+- **Key expiry:** when Garmin emails that your key is expiring, create a new one and update the `GARMIN_API_KEY` secret.
+
+### 6b. Or run it on your Mac (launchd)
 
 Keep the repo outside `~/Documents`, `~/Desktop` and `~/Downloads`: macOS blocks background jobs from reading those folders. From the repo folder, fill in the template, install it, and run it once as a test:
 
@@ -159,9 +179,9 @@ It runs every 2 hours and once when you log in. A run that's due while the Mac i
 | `--check` | Verify the API key and form link |
 | `--reset` | Forget which days were sent, so the next run resends its whole window |
 
-Optional settings in `config.json`: `firstRunDays` (default `90`), `overlapDays` (`3`), `requestDelayMs` (`250`). `GARMIN_API_KEY` and `PREFILL_URL` environment variables override the file.
+Optional settings in `config.json`: `firstRunDays` (default `90`; the `FIRST_RUN_DAYS` environment variable overrides it), `overlapDays` (`3`), `requestDelayMs` (`250`). `GARMIN_API_KEY` and `PREFILL_URL` environment variables override the file.
 
-The script records which days it has sent in `~/.config/garmin-sheet-sync/state.json`.
+The script records which days it has sent, as dates and hashes of their values, in `~/.config/garmin-sheet-sync/state.json` (or the folder in `GARMIN_SHEET_SYNC_DIR`).
 
 ## Duplicate rows
 

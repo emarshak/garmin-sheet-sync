@@ -1,0 +1,69 @@
+name: Sync Garmin to Google Sheet
+
+on:
+  schedule:
+    # Every 2 hours at :17 (GitHub may start scheduled runs late). Times are UTC.
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Re-pull the last N days (leave blank for a normal sync)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garmin-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Garmin dates are local; without this the runner's UTC clock would put "today" a day ahead every evening.
+      TZ: America/New_York
+      GARMIN_API_KEY: ${{ secrets.GARMIN_API_KEY }}
+      PREFILL_URL: ${{ secrets.PREFILL_URL }}
+      GARMIN_SHEET_SYNC_DIR: ${{ github.workspace }}/.sync-state
+      # With no saved state yet, look back only 3 days instead of 90, so switching over from
+      # another computer doesn't resubmit months of rows.
+      FIRST_RUN_DAYS: '3'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The record of which days were sent (dates and hashes only, no health data) persists
+      # between runs as a cache. Each run saves a new entry; restore picks the newest.
+      - name: Restore sync state
+        uses: actions/cache/restore@v4
+        with:
+          path: .sync-state
+          key: sync-state-${{ github.run_id }}
+          restore-keys: sync-state-
+
+      - name: Sync
+        env:
+          BACKFILL: ${{ inputs.backfill }}
+        run: |
+          if [ -z "$GARMIN_API_KEY" ] || [ -z "$PREFILL_URL" ]; then
+            echo "::error::Add the GARMIN_API_KEY and PREFILL_URL repository secrets (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          if [ -n "$BACKFILL" ]; then
+            node garmin-sheet-sync.mjs --backfill "$BACKFILL"
+          else
+            node garmin-sheet-sync.mjs
+          fi
+
+      - name: Save sync state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .sync-state
+          key: sync-state-${{ github.run_id }}

@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -121,6 +122,7 @@ function loadConfig() {
     apiKey: process.env.GARMIN_API_KEY || file.apiKey,
     prefillUrl: process.env.PREFILL_URL || file.prefillUrl,
     baseUrl: (process.env.GARMIN_BASE_URL || file.baseUrl || DEFAULTS.baseUrl).replace(/\/+$/, ''),
+    firstRunDays: Number(process.env.FIRST_RUN_DAYS) || file.firstRunDays || DEFAULTS.firstRunDays,
   };
   const missing = [];
   if (!cfg.apiKey) missing.push('apiKey');
@@ -305,7 +307,12 @@ async function submitRow(form, r) {
   throw new Error(`Form rejected ${r.date} (${res.status}): ${hint}`);
 }
 
-const fingerprint = (r) => FIELDS.map((f) => r[f] ?? '').join('|');
+// The state file stores a hash of each day's values, not the values themselves, so it holds no
+// health data (it's cached on GitHub when run from Actions). Older state files stored the raw
+// joined values; those still count as a match, so upgrading doesn't resend anything.
+const rawFingerprint = (r) => FIELDS.map((f) => r[f] ?? '').join('|');
+const fingerprint = (r) => createHash('sha256').update(rawFingerprint(r)).digest('hex').slice(0, 16);
+const alreadySent = (sent, r) => sent[r.date] === fingerprint(r) || sent[r.date] === rawFingerprint(r);
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -346,7 +353,7 @@ async function sync(cfg, { backfillDays, dryRun }) {
     log(`Dry run: ${rows.length} days, nothing submitted.`);
     return;
   }
-  const todo = rows.filter((r) => state.sent[r.date] !== fingerprint(r));
+  const todo = rows.filter((r) => !alreadySent(state.sent, r));
   let n = 0;
   for (const r of todo) {
     await submitRow(form, r);
@@ -398,6 +405,10 @@ async function main() {
     if (existsSync(STATE_FILE)) writeJson(STATE_FILE, { lastSyncedDate: null, sent: {} });
     log('Sync state reset; the next run resends everything in its window.');
     return;
+  }
+  // Logs of a public repo's Actions runs are public, so never print health data there.
+  if (process.env.GITHUB_ACTIONS === 'true' && (flag('--dry-run') || flag('--dump'))) {
+    throw new Error('--dry-run and --dump print your health data, and Actions logs on a public repo are public. Run them on your own computer.');
   }
   const cfg = loadConfig();
   if (flag('--check')) return check(cfg);
