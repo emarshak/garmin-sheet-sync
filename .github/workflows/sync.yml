@@ -7,10 +7,11 @@ name: Sync Garmin to Google Sheet
 
 on:
   schedule:
-    # Hourly at :43, away from the top of the hour when GitHub's scheduler is busiest. GitHub
-    # treats schedules as best-effort and delays or drops runs under load, so frequent attempts
-    # keep gaps short; a run with nothing new submits nothing. Times are UTC.
-    - cron: '43 * * * *'
+    # Fresh data is wanted by 7 AM, 8 AM, 12 PM and 8 PM Eastern. GitHub starts scheduled runs
+    # late (often 5-45 min) and drops some, especially near the top of the hour, so each run is
+    # scheduled at :41 of the hour before, which tends to land near the target time.
+    - cron: '41 6,7,11,19 * * *'
+      timezone: America/New_York
   workflow_dispatch:
     inputs:
       backfill:
