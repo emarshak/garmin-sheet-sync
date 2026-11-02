@@ -5,7 +5,7 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 ## What this repo is
 
 - `garmin-sheet-sync.mjs`: a dependency-free Node script. It exchanges a Garmin Personal API key for a bearer token, reads HRV, sleep and daily summaries, and submits one row per day to a Google Form linked to a Sheet.
-- `.github/workflows/sync.yml`: runs the script every 2 hours on GitHub Actions, using repository secrets.
+- `.github/workflows/sync.yml`: runs the script hourly on GitHub Actions, using repository secrets.
 - `launchd/`: alternative schedule for a Mac.
 - `deprecated/`: the old Tampermonkey userscript. Don't extend it.
 

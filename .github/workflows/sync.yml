@@ -7,8 +7,10 @@ name: Sync Garmin to Google Sheet
 
 on:
   schedule:
-    # Every 2 hours at :17 (GitHub may start scheduled runs late). Times are UTC.
-    - cron: '17 */2 * * *'
+    # Hourly at :43, away from the top of the hour when GitHub's scheduler is busiest. GitHub
+    # treats schedules as best-effort and delays or drops runs under load, so frequent attempts
+    # keep gaps short; a run with nothing new submits nothing. Times are UTC.
+    - cron: '43 * * * *'
   workflow_dispatch:
     inputs:
       backfill:
