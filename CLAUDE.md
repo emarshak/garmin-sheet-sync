@@ -7,7 +7,9 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 - `garmin-sheet-sync.mjs`: a dependency-free Node script. It exchanges a Garmin Personal API key for a bearer token, reads HRV, sleep and daily summaries, and submits one row per day to a Google Form linked to a Sheet.
 - `.github/workflows/sync.yml`: runs the script hourly on GitHub Actions, using repository secrets.
 - `launchd/`: alternative schedule for a Mac.
+- `lifestyle/lifestyle-sync.user.js`: a Tampermonkey userscript that reads Lifestyle Logging (caffeine, alcohol) from the signed-in Garmin Connect web app, which the Personal API doesn't offer, and submits it to the same form.
 - `deprecated/`: the old Tampermonkey userscript. Don't extend it.
+- The Sheet's `Daily` tab merges form rows by keeping, per date and per column, the latest non-blank value (formula in README). Writers may therefore submit partial rows (`date` plus their own columns), but must never submit a column they don't own, and must submit an explicit value such as `no` or `0` rather than a blank when they mean "no".
 
 ## What must stay protected
 
@@ -49,6 +51,13 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 - **Caches and artifacts:** cache only `.sync-state/state.json`. Don't upload artifacts. Logs, state and data files would all be visible beyond the owner.
 - Keep `concurrency` and `timeout-minutes`.
 
+### Lifestyle userscript
+- It runs in the user's signed-in Garmin Connect session, so treat it as having that session's full access. It may only read `/gc-api/lifestylelogging-service/…` with GET, and only send data to `https://docs.google.com/forms/…`. Keep `@connect docs.google.com` as its only cross-origin host, and keep `@match` limited to `https://connect.garmin.com/*`.
+- The form link lives in Tampermonkey storage (`GM_setValue`), never in the file. Don't add a config constant for it.
+- Don't add `@updateURL` or `@downloadURL`: auto-updating would run any future change to this public repo inside the user's Garmin session without review.
+- Submissions go with `anonymous: true`, so Google cookies are never sent.
+- Its console output is local to the user's browser. Only the explicit "Show raw response" menu command may print a response, and the user must not paste that output into issues, PRs or commits.
+
 ### Making changes
 - Run the script against mock servers on loopback to test changes. Never test against the real account in CI.
 - Every PR that touches the workflow, network code, logging or state handling should state in its description how it keeps these rules.
@@ -58,7 +67,7 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 Before merging any change, confirm:
 
 - [ ] No secrets, form links, tokens or real health data in the diff, fixtures, commit messages or PR text
-- [ ] Network calls still go only to `https://*.garmin.com` and `https://docs.google.com/forms/`
+- [ ] Network calls still go only to `https://*.garmin.com` and `https://docs.google.com/forms/`, and the lifestyle userscript keeps `docs.google.com` as its only `@connect` host
 - [ ] No new logging of keys, tokens, headers, response bodies or health values; CI guards intact
 - [ ] `state.json` still holds only dates and hashes
 - [ ] Workflow: `contents: read`, secrets scoped to the script step, actions pinned to SHAs, no new triggers, inputs passed via `env`, `persist-credentials: false`

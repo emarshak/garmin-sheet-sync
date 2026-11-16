@@ -23,6 +23,7 @@ Garmin files last night's sleep, HRV and overnight heart rate under **today's** 
 | `sleep_score`, `sleep_hours`, `deep_hours`, `rem_hours`, `overnight_hr` | `/sleep-service/sleep/dailySleepSummariesByDate` | Durations in hours; `overnight_hr` is average heart rate while asleep, in bpm |
 | `resting_hr`, `min_hr`, `max_hr`, `body_battery_high`, `body_battery_low`, `avg_stress`, `steps` | `/usersummary-service/v2/dailysummaries` | Falls back to `/usersummary-service/usersummary/daily` one day at a time |
 | `readiness_score`, `readiness_level` | — | Left blank: the Personal API doesn't provide training readiness |
+| `caffeine`, `caffeine_amount`, `caffeine_late`, `alcohol`, `alcohol_drinks` | Garmin Connect web app, `/lifestylelogging-service/dailyLog/{date}` | From Lifestyle Logging, by [`lifestyle/lifestyle-sync.user.js`](lifestyle/lifestyle-sync.user.js), not the Personal API. See [Lifestyle Logging](#lifestyle-logging-caffeine-and-alcohol) |
 
 Requests are split to stay within Garmin's per-request range limits (28 days for HRV, 31 for sleep, 365 for daily summaries).
 
@@ -185,10 +186,45 @@ The script records which days it has sent, as dates and hashes of their values, 
 
 ## Duplicate rows
 
-Google Forms can only append, so each date normally gets two rows: a morning row with sleep and HRV, then the complete row the next day. If Garmin revises a day, that adds another. The latest row for a date is always the most complete. To get one row per day (the latest), add a tab named `Daily` with:
+Google Forms can only append, so a date gets several rows: a morning row with sleep and HRV, the complete row the next day, another if Garmin revises the day, and a separate row from the lifestyle userscript. To get one row per day, add a tab named `Daily` that keeps, for each date and each column, the **latest non-blank value**:
 
-- **A1:** `={'Form Responses 1'!A1:V1}`
-- **A2:** `=SORT(SORTN(SORT(FILTER('Form Responses 1'!A2:V,'Form Responses 1'!B2:B<>""),1,FALSE),9^9,2,2,TRUE),2,TRUE)`
+- **A1:** `={'Form Responses 1'!A1:AA1}`
+- **A2:**
+
+  ```
+  =ARRAYFORMULA(LET(s, SORT(FILTER('Form Responses 1'!A2:AA, 'Form Responses 1'!B2:B<>""), 1, TRUE), d, INDEX(s,,2), days, SORT(UNIQUE(d)), latest, LAMBDA(c, IF(c=2, days, LET(col, INDEX(s,,c), keep, col<>"", IF(OR(keep), XLOOKUP(days, FILTER(d, keep), FILTER(col, keep), "", 0, -1), IF(days=days, ""))))), REDUCE(latest(1), SEQUENCE(COLUMNS(s)-1, 1, 2), LAMBDA(acc, c, HSTACK(acc, latest(c))))))
+  ```
+
+Set column A's number format to date and time. The tab needs at least 27 columns (A to AA); add columns if Sheets reports that the result can't expand. If you add more form questions later, widen `AA` in both formulas to the new last column.
+
+Keeping the latest non-blank value per column, rather than the latest whole row, means a row that fills only some columns (the morning row, or a lifestyle row) never blanks out the others.
+
+## Lifestyle Logging (caffeine and alcohol)
+
+Garmin's official Personal API doesn't include Lifestyle Logging: its documented endpoints cover activities, sleep, HRV, heart rate, stress, Body Battery, steps, SpO2, hydration, weight, nutrition, menstrual cycle and fitness age. To confirm with your own key, run `node garmin-sheet-sync.mjs --dump <date>`: the last section probes the lifestyle endpoint and reports 404 if it's not offered.
+
+The Garmin Connect web app reads Lifestyle Logging from `/lifestylelogging-service/dailyLog/{date}`, so a separate userscript, [`lifestyle/lifestyle-sync.user.js`](lifestyle/lifestyle-sync.user.js), reads it from your signed-in Garmin Connect tab and submits rows to the same form. Like the deprecated userscript, it uses an undocumented endpoint that Garmin can change without notice.
+
+**Columns.** Each row is filed under the calendar day the behavior happened. Its effect shows up in the next morning's HRV, overnight HR and sleep, which Garmin files under the next date, so compare lifestyle on day X with health data on day X+1.
+
+| Column | Values |
+|---|---|
+| `caffeine` | `yes` if any caffeine behavior was logged yes, `no` if answered no, blank if not answered |
+| `caffeine_amount` | Sum of logged amounts if caffeine is tracked as a quantity; `0` when `no`; blank if no amount |
+| `caffeine_late` | `yes` from a behavior named like "Late caffeine", or a logged time at or after 2 PM; `no` otherwise; blank if unknown |
+| `alcohol` | `yes`, `no` or blank, as for caffeine |
+| `alcohol_drinks` | Number of drinks if logged as a quantity; `0` when `no`; blank if no amount |
+
+Behaviors are matched by name (caffeine, coffee or espresso; alcohol, beer, wine, liquor or cocktail). If yours have other names, edit the patterns at the top of the script.
+
+**Setup:**
+1. Add five **Short answer** questions to the form, titled exactly `caffeine`, `caffeine_amount`, `caffeine_late`, `alcohol` and `alcohol_drinks`. Google adds them as the last columns of `Form Responses 1` (W to AA), and the `Daily` formulas above already cover them.
+2. Make a new pre-filled link that includes them (step 3). The Actions or launchd sync doesn't need the new link, but updating `PREFILL_URL` is harmless.
+3. In Tampermonkey, create a script from `lifestyle/lifestyle-sync.user.js`. Then, on a Garmin Connect page, open the Tampermonkey menu → **Set form link** and paste the pre-filled link. It's stored in Tampermonkey, not in the script.
+4. Run **Show raw response for a date (console)** for a day you logged, and check that the parsed row matches what you logged. If a column comes out blank, the response shape differs from what the script expects.
+5. Click **Lifestyle → Sheet**, or use **Backfill lifestyle (90 days)**.
+
+After that, it syncs whenever you open Garmin Connect, if the last sync was more than 6 hours ago, re-checking the last 14 days because logs are often added late.
 
 ## Troubleshooting
 

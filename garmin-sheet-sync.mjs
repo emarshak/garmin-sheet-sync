@@ -396,10 +396,16 @@ async function dump(cfg, date) {
     ['/sleep-service/sleep/dailySleepSummariesByDate', { startDate: date, endDate: date }],
     ['/usersummary-service/v2/dailysummaries', { startDate: date, endDate: date }],
     ['/usersummary-service/usersummary/daily', { calendarDate: date }],
+    // Lifestyle Logging isn't among the Personal API's documented endpoints; this probe shows
+    // whether that has changed. Today it's read by lifestyle-sync.user.js instead.
+    ['/lifestylelogging-service/dailyLog/' + date],
   ];
   for (const [path, params] of calls) {
     console.log(`\n=== GET ${path}${params ? '?' + new URLSearchParams(params) : ''}`);
-    try { console.log(JSON.stringify(await g.get(path, params), null, 2)); } catch (e) { console.log('ERROR', e.message); }
+    try {
+      const data = await g.get(path, params);
+      console.log(data === null ? '(no response body: 404 means the Personal API does not offer this endpoint)' : JSON.stringify(data, null, 2));
+    } catch (e) { console.log('ERROR', e.message); }
   }
   console.log('\n=== Parsed row');
   console.log(JSON.stringify(await collect(g, d, d), null, 2));
