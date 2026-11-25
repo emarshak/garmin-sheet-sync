@@ -28,7 +28,7 @@ Requests are split to stay within Garmin's per-request range limits (28 days for
 
 ## Setup (about 15 minutes)
 
-You need Node 18 or newer (`node --version`).
+You need Node 18 or newer (`node --version`). Use a release line that still gets security fixes (22, 24 or 26 as of late 2026; see [Node.js releases](https://nodejs.org/en/about/previous-releases)). The GitHub Actions workflow uses Node 26.
 
 ### 1. Create a Garmin Personal API key
 
