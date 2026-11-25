@@ -13,10 +13,10 @@
 //   node garmin-sheet-sync.mjs --check         verify the API key and form link
 //   node garmin-sheet-sync.mjs --reset         forget which days were already sent
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -34,6 +34,9 @@ const DEFAULTS = {
 
 const TOKEN_PATH = '/personalapitoken-service/personal-api/personal-api-key/token';
 const TIMEOUT_MS = 30_000;
+
+// Furthest back a normal sync reaches, however old the saved state is; --backfill can go further.
+const MAX_CATCHUP_DAYS = 365;
 
 // Per-request range limits from Garmin's Personal API docs (HRV is undocumented; kept conservative).
 const MAX_DAYS = { hrv: 28, sleep: 31, dailies: 365 };
@@ -105,6 +108,12 @@ function rowsOf(data, ...keys) {
 }
 const dateOf = (r) => String(pick(r, 'calendarDate', 'dailySleepDTO.calendarDate', 'summaryDate', 'date')).slice(0, 10);
 
+// JSON.parse's own error quotes a few characters of the input, which could put part of a token
+// or health data into a public Actions log. Replace it with a message that names only the source.
+function parseJson(text, what) {
+  try { return JSON.parse(text); } catch { throw new Error(`${what} returned invalid JSON`); }
+}
+
 function readJson(path, fallback) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return fallback; }
 }
@@ -126,9 +135,19 @@ function checkGarminUrl(raw) {
   return u.origin;
 }
 
+// config.json holds the API key, so warn (as ssh does) if other users can read or change it.
+function warnIfConfigExposed() {
+  if (process.platform === 'win32' || !existsSync(CONFIG_FILE)) return;
+  const mode = statSync(CONFIG_FILE).mode & 0o777;
+  if (mode & 0o077) {
+    log(`Warning: ${CONFIG_FILE} is accessible to other users (mode ${mode.toString(8)}). Run: chmod 600 "${CONFIG_FILE}"`);
+  }
+}
+
 function loadConfig() {
   // Under Actions, settings come only from the workflow's env, never from a file: the state
   // folder is restored from a cache, and a config file in it must not be able to redirect requests.
+  if (!IN_CI) warnIfConfigExposed();
   const file = IN_CI ? {} : readJson(CONFIG_FILE, {});
   const { baseUrl: _ignoredBaseUrl, ...fileSettings } = file; // the base URL can only be overridden by env
   const cfg = {
@@ -163,6 +182,7 @@ class Garmin {
     const res = await fetch(this.cfg.baseUrl + TOKEN_PATH, {
       method: 'POST',
       headers: { Accept: '*/*', Authorization: `ApiKey ${this.cfg.apiKey}` },
+      redirect: 'error', // never let a redirect carry the key off the checked host
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = (await res.text()).trim();
@@ -171,7 +191,12 @@ class Garmin {
     }
     if (!res.ok) throw new Error(`Token exchange failed (${res.status})`); // body omitted: it may echo credentials
     // The endpoint returns the bearer token as the response body.
-    this.token = body.startsWith('{') ? (JSON.parse(body).access_token || JSON.parse(body).accessToken) : body;
+    if (body.startsWith('{')) {
+      const json = parseJson(body, 'Token exchange');
+      this.token = json.access_token || json.accessToken;
+    } else {
+      this.token = body;
+    }
     if (!this.token) throw new Error('Token exchange returned no token');
   }
 
@@ -181,6 +206,7 @@ class Garmin {
     for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, v);
     const res = await fetch(url, {
       headers: { Accept: 'application/json', Authorization: `Bearer ${this.token}` },
+      redirect: 'error', // never let a redirect carry the token off the checked host
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (res.status === 401 && !retried) {
@@ -196,7 +222,7 @@ class Garmin {
     }
     const text = await res.text();
     await pause(this.cfg.requestDelayMs);
-    return text ? JSON.parse(text) : null;
+    return text ? parseJson(text, path) : null;
   }
 }
 
@@ -328,12 +354,27 @@ async function submitRow(form, r) {
   throw new Error(`Form rejected ${r.date} (${res.status}): ${hint}`);
 }
 
-// The state file stores a hash of each day's values, not the values themselves, so it holds no
-// health data (it's cached on GitHub when run from Actions). Older state files stored the raw
-// joined values; those still count as a match, so upgrading doesn't resend anything.
+// The state file stores a keyed hash (HMAC-SHA-256) of each day's values, never the values. It's
+// cached on GitHub when run from Actions, and health values have few possible combinations, so a
+// plain hash could be reversed by trying them all. The key is the form's address, which is already
+// secret (anyone with it can add rows) and stays the same when the pre-filled link is regenerated.
+// Older state files stored a plain SHA-256 or the raw joined values. Those still count as a match,
+// so upgrading resends nothing, and each matching day is rewritten in the new format.
 const rawFingerprint = (r) => FIELDS.map((f) => r[f] ?? '').join('|');
-const fingerprint = (r) => createHash('sha256').update(rawFingerprint(r)).digest('hex').slice(0, 16);
-const alreadySent = (sent, r) => sent[r.date] === fingerprint(r) || sent[r.date] === rawFingerprint(r);
+const legacyFingerprint = (r) => createHash('sha256').update(rawFingerprint(r)).digest('hex').slice(0, 16);
+const fingerprint = (key, r) => 'h1:' + createHmac('sha256', key).update(rawFingerprint(r)).digest('hex').slice(0, 32);
+const matchesLegacy = (sent, r) => sent[r.date] === legacyFingerprint(r) || sent[r.date] === rawFingerprint(r);
+
+// The state file is restored from a cache, so check its shape rather than trusting it.
+function loadState() {
+  const s = readJson(STATE_FILE, {});
+  const sent = s && typeof s.sent === 'object' && s.sent !== null && !Array.isArray(s.sent) ? s.sent : {};
+  let lastSyncedDate = s && typeof s.lastSyncedDate === 'string' ? s.lastSyncedDate : null;
+  if (lastSyncedDate) {
+    try { parseYmd(lastSyncedDate); } catch { log('Ignoring an invalid lastSyncedDate in the state file.'); lastSyncedDate = null; }
+  }
+  return { lastSyncedDate, sent };
+}
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -353,13 +394,22 @@ async function collect(g, from, to) {
 async function sync(cfg, { backfillDays, dryRun }) {
   const form = formSetup(cfg.prefillUrl);
   const g = new Garmin(cfg);
-  const state = readJson(STATE_FILE, { lastSyncedDate: null, sent: {} });
+  const state = loadState();
   const today = parseYmd(ymd(new Date()));
-  const from = backfillDays
+  let from = backfillDays
     ? addDays(today, -(backfillDays - 1))
     : state.lastSyncedDate
       ? addDays(parseYmd(state.lastSyncedDate), -cfg.overlapDays)
       : addDays(today, -(cfg.firstRunDays - 1));
+  if (!backfillDays) {
+    // A stale or tampered state file mustn't trigger years of requests, or skip recent days.
+    const earliest = addDays(today, -(MAX_CATCHUP_DAYS - 1));
+    if (from < earliest) {
+      log(`Saved state is older than ${MAX_CATCHUP_DAYS} days; syncing only the last ${MAX_CATCHUP_DAYS}. Use --backfill to go further.`);
+      from = earliest;
+    }
+    if (from > today) from = addDays(today, -cfg.overlapDays);
+  }
 
   // Garmin files last night's sleep and HRV under today's date, and those are final by
   // morning. Today's totals (steps, stress, Body Battery, heart rate) keep changing until
@@ -374,18 +424,28 @@ async function sync(cfg, { backfillDays, dryRun }) {
     log(`Dry run: ${rows.length} days, nothing submitted.`);
     return;
   }
-  const todo = rows.filter((r) => !alreadySent(state.sent, r));
+  const key = form.action;
+  // Days sent under an older state format: already in the Sheet, so just rewrite their record.
+  let upgraded = 0;
+  for (const r of rows) {
+    if (state.sent[r.date] !== fingerprint(key, r) && matchesLegacy(state.sent, r)) {
+      state.sent[r.date] = fingerprint(key, r);
+      upgraded++;
+    }
+  }
+  if (upgraded) writeJson(STATE_FILE, state);
+  const todo = rows.filter((r) => state.sent[r.date] !== fingerprint(key, r));
   let n = 0;
   for (const r of todo) {
     await submitRow(form, r);
-    state.sent[r.date] = fingerprint(r);
+    state.sent[r.date] = fingerprint(key, r);
     writeJson(STATE_FILE, state); // save as we go so a failure mid-run doesn't resend
     n++;
     await pause(cfg.requestDelayMs);
   }
   state.lastSyncedDate = todayS;
   writeJson(STATE_FILE, state);
-  log(`Synced: ${n} submitted, ${rows.length - n} unchanged.`);
+  log(`Synced: ${n} submitted, ${rows.length - n} unchanged.` + (upgraded ? ` Updated the state format for ${upgraded} days.` : ''));
 }
 
 async function dump(cfg, date) {

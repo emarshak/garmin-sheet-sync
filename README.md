@@ -179,9 +179,15 @@ It runs every 2 hours and once when you log in. A run that's due while the Mac i
 | `--check` | Verify the API key and form link |
 | `--reset` | Forget which days were sent, so the next run resends its whole window |
 
+A normal run reaches back at most 365 days, however old the saved state is; use `--backfill` to go further. The script warns if `config.json` can be read by other users.
+
 Optional settings in `config.json`: `firstRunDays` (default `90`; the `FIRST_RUN_DAYS` environment variable overrides it), `overlapDays` (`3`), `requestDelayMs` (`250`). `GARMIN_API_KEY` and `PREFILL_URL` environment variables override the file.
 
-The script records which days it has sent, as dates and hashes of their values, in `~/.config/garmin-sheet-sync/state.json` (or the folder in `GARMIN_SHEET_SYNC_DIR`).
+The script records which days it has sent, as dates and keyed hashes of their values (never the values), in `~/.config/garmin-sheet-sync/state.json` (or the folder in `GARMIN_SHEET_SYNC_DIR`).
+
+## Testing
+
+`node test/run-tests.mjs` runs the script against mock Garmin and Google Form servers on loopback, with synthetic data. It needs no network access or credentials.
 
 ## Duplicate rows
 
