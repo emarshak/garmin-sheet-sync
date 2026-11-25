@@ -32,11 +32,12 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 
 ### Logging and output
 - Under Actions (`GITHUB_ACTIONS=true`), output must contain only dates, counts and generic errors. Keep the `IN_CI` guards: `--dry-run` and `--dump` refuse to run, and errors omit response bodies.
-- Never log the API key, token, form link, request headers or response bodies, locally or in CI. Never include the token-exchange response in an error.
+- Never log the API key, token, form link, request headers or response bodies, locally or in CI. Never include the token-exchange response in an error. Parse JSON with `parseJson`, not bare `JSON.parse`, whose errors quote part of the input.
+- Garmin requests use `redirect: 'error'`, so the key and token can't follow a redirect off the checked host. Keep it.
 - If something sensitive must be printed in CI for debugging, don't. Reproduce it locally instead.
 
 ### State file
-- `state.json` stores only dates and a truncated SHA-256 of each day's values, never the values. It's restored from an Actions cache, so treat its contents as untrusted: it may only influence which days are resent, never where data goes or which credentials are used.
+- `state.json` stores only dates and a keyed hash (HMAC-SHA-256, keyed with the form's address) of each day's values, never the values. Don't switch back to a plain hash: health values have few enough combinations that an unkeyed hash can be reversed by trying them all, and anyone who can run a workflow in the repo can read the cache. The state is restored from an Actions cache, so treat its contents as untrusted: it may only influence which days are resent, never where data goes or which credentials are used, and the script validates its shape and limits how far back it reaches.
 - Under Actions, the script reads no config file. Keep it that way, since the state folder comes from a cache.
 
 ### GitHub Actions workflow
@@ -50,7 +51,7 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 - Keep `concurrency` and `timeout-minutes`.
 
 ### Making changes
-- Run the script against mock servers on loopback to test changes. Never test against the real account in CI.
+- Run the script against mock servers on loopback to test changes: `node test/run-tests.mjs` (synthetic data only). Never test against the real account in CI.
 - Every PR that touches the workflow, network code, logging or state handling should state in its description how it keeps these rules.
 
 ## Review checklist
