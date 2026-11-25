@@ -49,6 +49,7 @@ Guidance for Claude (and anyone else) changing this repo. Security comes first: 
 - **Checkout:** keep `persist-credentials: false`.
 - **Caches and artifacts:** cache only `.sync-state/state.json`. Don't upload artifacts. Logs, state and data files would all be visible beyond the owner.
 - Keep `concurrency` and `timeout-minutes`.
+- **Node version:** run on the newest Node LTS major with `check-latest: true`, so security patches apply on the next run. Node promotes a new LTS each October; move the workflow to it that fall, well before the old line's end of life.
 
 ### Making changes
 - Run the script against mock servers on loopback to test changes: `node test/run-tests.mjs` (synthetic data only). Never test against the real account in CI.
